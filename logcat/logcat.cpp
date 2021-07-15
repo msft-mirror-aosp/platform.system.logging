@@ -36,6 +36,7 @@
 
 #include <memory>
 #include <regex>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -50,6 +51,7 @@
 #include <android/log.h>
 #include <log/event_tag_map.h>
 #include <log/log_id.h>
+#include <log/log_read.h>
 #include <log/logprint.h>
 #include <private/android_logger.h>
 #include <processgroup/sched_policy.h>
@@ -62,6 +64,7 @@ using android::base::ParseByteCount;
 using android::base::ParseUint;
 using android::base::Split;
 using android::base::StringPrintf;
+using android::base::WriteFully;
 
 class Logcat {
   public:
@@ -95,9 +98,10 @@ class Logcat {
     std::unique_ptr<std::regex> regex_;
     size_t max_count_ = 0;  // 0 means "infinite"
     size_t print_count_ = 0;
-    bool print_it_anyways_ = false;
+    bool print_it_anyway_ = false;
 
     // For PrintDividers()
+    bool print_dividers_ = false;
     log_id_t last_printed_id_ = LOG_ID_MAX;
     bool printed_start_[LOG_ID_MAX] = {};
 
@@ -211,7 +215,9 @@ void Logcat::ProcessBuffer(struct log_msg* buf) {
                      std::regex_search(entry.message, entry.message + entry.messageLen, *regex_);
 
         print_count_ += match;
-        if (match || print_it_anyways_) {
+        if (match || print_it_anyway_) {
+            PrintDividers(buf->id(), print_dividers_);
+
             bytesWritten = android_log_printLogLine(logformat_.get(), output_fd_.get(), &entry);
 
             if (bytesWritten < 0) {
@@ -228,7 +234,7 @@ void Logcat::ProcessBuffer(struct log_msg* buf) {
 }
 
 void Logcat::PrintDividers(log_id_t log_id, bool print_dividers) {
-    if (log_id == last_printed_id_ || print_binary_) {
+    if (log_id == last_printed_id_) {
         return;
     }
     if (!printed_start_[log_id] || print_dividers) {
@@ -331,14 +337,14 @@ Logd control:
                               This can individually control each buffer's size with -b.
   -S, --statistics            Output statistics.
                               --pid can be used to provide pid specific stats.
-  -p, --prune                 Print prune white and ~black list. Service is specified as UID,
-                              UID/PID or /PID. Weighed for quicker pruning if prefix with ~,
-                              otherwise weighed for longevity if unadorned. All other pruning
-                              activity is oldest first. Special case ~! represents an automatic
-                              quicker pruning for the noisiest UID as determined by the current
-                              statistics.
-  -P, --prune='<list> ...'    Set prune white and ~black list, using same format as listed above.
-                              Must be quoted.
+  -p, --prune                 Print prune rules. Each rule is specified as UID, UID/PID or /PID. A
+                              '~' prefix indicates that elements matching the rule should be pruned
+                              with higher priority otherwise they're pruned with lower priority. All
+                              other pruning activity is oldest first. Special case ~! represents an
+                              automatic pruning for the noisiest UID as determined by the current
+                              statistics.  Special case ~1000/! represents pruning of the worst PID
+                              within AID_SYSTEM when AID_SYSTEM is the noisiest UID.
+  -P, --prune='<list> ...'    Set prune rules, using same format as listed above. Must be quoted.
 
 Filtering:
   -s                          Set default filter to silent. Equivalent to filterspec '*:S'
@@ -357,6 +363,10 @@ Filtering:
   -T '<time>'                 Print the lines since specified time (not imply -d).
                               count is pure numerical, time is 'MM-DD hh:mm:ss.mmm...'
                               'YYYY-MM-DD hh:mm:ss.mmm...' or 'sssss.mmm...' format.
+  --uid=<uids>                Only display log messages from UIDs present in the comma separate list
+                              <uids>. No name look-up is performed, so UIDs must be provided as
+                              numeric values. This option is only useful for the 'root', 'log', and
+                              'system' users since only those users can view logs from other users.
 )init");
 
     fprintf(stderr, "\nfilterspecs are a series of \n"
@@ -396,8 +406,8 @@ static void show_format_help() {
         "  time       — Display the date, invocation time, priority/tag, and PID of the\n"
         "             process issuing the message.\n"
         "\nAdverb modifiers can be used in combination:\n"
-        "  color       — Display in highlighted color to match priority. i.e. \x1B[38;5;231mVERBOSE\n"
-        "                \x1B[38;5;75mDEBUG \x1B[38;5;40mINFO \x1B[38;5;166mWARNING \x1B[38;5;196mERROR FATAL\x1B[0m\n"
+        "  color       — Display in highlighted color to match priority. i.e. \x1B[39mVERBOSE\n"
+        "                \x1B[34mDEBUG \x1B[32mINFO \x1B[33mWARNING \x1B[31mERROR FATAL\x1B[0m\n"
         "  descriptive — events logs only, descriptions from event-log-tags database.\n"
         "  epoch       — Display time as seconds since Jan 1 1970.\n"
         "  monotonic   — Display time as cpu seconds since last boot.\n"
@@ -458,7 +468,7 @@ static log_time lastLogTime(const char* outputFileName) {
                                             closedir);
     if (!dir.get()) return retval;
 
-    log_time now(android_log_clockid());
+    log_time now(CLOCK_REALTIME);
 
     size_t len = strlen(file);
     log_time modulo(0, NS_PER_SEC);
@@ -523,17 +533,17 @@ int Logcat::Run(int argc, char** argv) {
     bool getLogSize = false;
     bool getPruneList = false;
     bool printStatistics = false;
-    bool printDividers = false;
     unsigned long setLogSize = 0;
     const char* setPruneList = nullptr;
     const char* setId = nullptr;
-    int mode = ANDROID_LOG_RDONLY;
+    int mode = 0;
     std::string forceFilters;
     size_t tail_lines = 0;
     log_time tail_time(log_time::EPOCH);
     size_t pid = 0;
     bool got_t = false;
     unsigned id_mask = 0;
+    std::set<uid_t> uids;
 
     if (argc == 2 && !strcmp(argv[1], "--help")) {
         show_help();
@@ -553,6 +563,7 @@ int Logcat::Run(int argc, char** argv) {
         static const char id_str[] = "id";
         static const char wrap_str[] = "wrap";
         static const char print_str[] = "print";
+        static const char uid_str[] = "uid";
         // clang-format off
         static const struct option long_options[] = {
           { "binary",        no_argument,       nullptr, 'B' },
@@ -580,6 +591,7 @@ int Logcat::Run(int argc, char** argv) {
           { "statistics",    no_argument,       nullptr, 'S' },
           // hidden and undocumented reserved alias for -t
           { "tail",          required_argument, nullptr, 't' },
+          { uid_str,         required_argument, nullptr, 0 },
           // support, but ignore and do not document, the optional argument
           { wrap_str,        optional_argument, nullptr, 0 },
           { nullptr,         0,                 nullptr, 0 }
@@ -605,23 +617,22 @@ int Logcat::Run(int argc, char** argv) {
                     break;
                 }
                 if (long_options[option_index].name == wrap_str) {
-                    mode |= ANDROID_LOG_WRAP | ANDROID_LOG_RDONLY |
-                            ANDROID_LOG_NONBLOCK;
+                    mode |= ANDROID_LOG_WRAP | ANDROID_LOG_NONBLOCK;
                     // ToDo: implement API that supports setting a wrap timeout
-                    size_t dummy = ANDROID_LOG_WRAP_DEFAULT_TIMEOUT;
-                    if (optarg && (!ParseUint(optarg, &dummy) || dummy < 1)) {
+                    size_t timeout = ANDROID_LOG_WRAP_DEFAULT_TIMEOUT;
+                    if (optarg && (!ParseUint(optarg, &timeout) || timeout < 1)) {
                         error(EXIT_FAILURE, 0, "%s %s out of range.",
                               long_options[option_index].name, optarg);
                     }
-                    if (dummy != ANDROID_LOG_WRAP_DEFAULT_TIMEOUT) {
+                    if (timeout != ANDROID_LOG_WRAP_DEFAULT_TIMEOUT) {
                         fprintf(stderr, "WARNING: %s %u seconds, ignoring %zu\n",
                                 long_options[option_index].name, ANDROID_LOG_WRAP_DEFAULT_TIMEOUT,
-                                dummy);
+                                timeout);
                     }
                     break;
                 }
                 if (long_options[option_index].name == print_str) {
-                    print_it_anyways_ = true;
+                    print_it_anyway_ = true;
                     break;
                 }
                 if (long_options[option_index].name == debug_str) {
@@ -630,6 +641,17 @@ int Logcat::Run(int argc, char** argv) {
                 }
                 if (long_options[option_index].name == id_str) {
                     setId = (optarg && optarg[0]) ? optarg : nullptr;
+                }
+                if (long_options[option_index].name == uid_str) {
+                    auto uid_strings = Split(optarg, delimiters);
+                    for (const auto& uid_string : uid_strings) {
+                        uid_t uid;
+                        if (!ParseUint(uid_string, &uid)) {
+                            error(EXIT_FAILURE, 0, "Unable to parse UID '%s'", uid_string.c_str());
+                        }
+                        uids.emplace(uid);
+                    }
+                    break;
                 }
                 break;
 
@@ -640,21 +662,19 @@ int Logcat::Run(int argc, char** argv) {
 
             case 'c':
                 clearLog = true;
-                mode |= ANDROID_LOG_WRONLY;
                 break;
 
             case 'L':
-                mode |= ANDROID_LOG_RDONLY | ANDROID_LOG_PSTORE |
-                        ANDROID_LOG_NONBLOCK;
+                mode |= ANDROID_LOG_PSTORE | ANDROID_LOG_NONBLOCK;
                 break;
 
             case 'd':
-                mode |= ANDROID_LOG_RDONLY | ANDROID_LOG_NONBLOCK;
+                mode |= ANDROID_LOG_NONBLOCK;
                 break;
 
             case 't':
                 got_t = true;
-                mode |= ANDROID_LOG_RDONLY | ANDROID_LOG_NONBLOCK;
+                mode |= ANDROID_LOG_NONBLOCK;
                 FALLTHROUGH_INTENDED;
             case 'T':
                 if (strspn(optarg, "0123456789") != strlen(optarg)) {
@@ -678,7 +698,7 @@ int Logcat::Run(int argc, char** argv) {
                 break;
 
             case 'D':
-                printDividers = true;
+                print_dividers_ = true;
                 break;
 
             case 'e':
@@ -774,92 +794,6 @@ int Logcat::Run(int argc, char** argv) {
                 }
                 break;
 
-            case 'Q':
-#define LOGCAT_FILTER "androidboot.logcat="
-#define CONSOLE_PIPE_OPTION "androidboot.consolepipe="
-#define CONSOLE_OPTION "androidboot.console="
-#define QEMU_PROPERTY "ro.kernel.qemu"
-#define QEMU_CMDLINE "qemu.cmdline"
-                // This is a *hidden* option used to start a version of logcat
-                // in an emulated device only.  It basically looks for
-                // androidboot.logcat= on the kernel command line.  If
-                // something is found, it extracts a log filter and uses it to
-                // run the program. The logcat output will go to consolepipe if
-                // androiboot.consolepipe (e.g. qemu_pipe) is given, otherwise,
-                // it goes to androidboot.console (e.g. tty)
-                {
-                    // if not in emulator, exit quietly
-                    if (false == android::base::GetBoolProperty(QEMU_PROPERTY, false)) {
-                        return EXIT_SUCCESS;
-                    }
-
-                    std::string cmdline = android::base::GetProperty(QEMU_CMDLINE, "");
-                    if (cmdline.empty()) {
-                        android::base::ReadFileToString("/proc/cmdline", &cmdline);
-                    }
-
-                    const char* logcatFilter = strstr(cmdline.c_str(), LOGCAT_FILTER);
-                    // if nothing found or invalid filters, exit quietly
-                    if (!logcatFilter) {
-                        return EXIT_SUCCESS;
-                    }
-
-                    const char* p = logcatFilter + strlen(LOGCAT_FILTER);
-                    const char* q = strpbrk(p, " \t\n\r");
-                    if (!q) q = p + strlen(p);
-                    forceFilters = std::string(p, q);
-
-                    // redirect our output to the emulator console pipe or console
-                    const char* consolePipe =
-                        strstr(cmdline.c_str(), CONSOLE_PIPE_OPTION);
-                    const char* console =
-                        strstr(cmdline.c_str(), CONSOLE_OPTION);
-
-                    if (consolePipe) {
-                        p = consolePipe + strlen(CONSOLE_PIPE_OPTION);
-                    } else if (console) {
-                        p = console + strlen(CONSOLE_OPTION);
-                    } else {
-                        return EXIT_FAILURE;
-                    }
-
-                    q = strpbrk(p, " \t\n\r");
-                    int len = q ? q - p : strlen(p);
-                    std::string devname = "/dev/" + std::string(p, len);
-                    std::string pipePurpose("pipe:logcat");
-                    if (consolePipe) {
-                        // example: "qemu_pipe,pipe:logcat"
-                        // upon opening of /dev/qemu_pipe, the "pipe:logcat"
-                        // string with trailing '\0' should be written to the fd
-                        size_t pos = devname.find(',');
-                        if (pos != std::string::npos) {
-                            pipePurpose = devname.substr(pos + 1);
-                            devname = devname.substr(0, pos);
-                        }
-                    }
-
-                    fprintf(stderr, "logcat using %s\n", devname.c_str());
-
-                    int fd = open(devname.c_str(), O_WRONLY | O_CLOEXEC);
-                    if (fd < 0) {
-                        break;
-                    }
-
-                    if (consolePipe) {
-                        // need the trailing '\0'
-                        if (!android::base::WriteFully(fd, pipePurpose.c_str(),
-                                                       pipePurpose.size() + 1)) {
-                            close(fd);
-                            return EXIT_FAILURE;
-                        }
-                    }
-                    // close output and error channels, replace with console
-                    dup2(fd, output_fd_.get());
-                    dup2(fd, STDERR_FILENO);
-                    close(fd);
-                }
-                break;
-
             case 'S':
                 printStatistics = true;
                 break;
@@ -885,7 +819,7 @@ int Logcat::Run(int argc, char** argv) {
     if (max_count_ && got_t) {
         error(EXIT_FAILURE, 0, "Cannot use -m (--max-count) and -t together.");
     }
-    if (print_it_anyways_ && (!regex_ || !max_count_)) {
+    if (print_it_anyway_ && (!regex_ || !max_count_)) {
         // One day it would be nice if --print -v color and --regex <expr>
         // could play with each other and show regex highlighted content.
         fprintf(stderr,
@@ -893,7 +827,7 @@ int Logcat::Run(int argc, char** argv) {
                 "--print ignored, to be used in combination with\n"
                 "         "
                 "--regex <expr> and --max-count <N>\n");
-        print_it_anyways_ = false;
+        print_it_anyway_ = false;
     }
 
     // If no buffers are specified, default to using these buffers.
@@ -1047,19 +981,23 @@ int Logcat::Run(int argc, char** argv) {
         if (getLogSize) {
             long size = android_logger_get_log_size(logger);
             long readable = android_logger_get_log_readable_size(logger);
+            long consumed = android_logger_get_log_consumed_size(logger);
 
             if (size < 0 || readable < 0) {
                 ReportErrorName(buffer_name, security_buffer_selected, &get_size_failures);
             } else {
                 auto size_format = format_of_size(size);
                 auto readable_format = format_of_size(readable);
+                auto consumed_format = format_of_size(consumed);
                 std::string str = android::base::StringPrintf(
-                        "%s: ring buffer is %lu %sB (%lu %sB consumed),"
+                        "%s: ring buffer is %lu %sB (%lu %sB consumed, %lu %sB readable),"
                         " max entry is %d B, max payload is %d B\n",
-                        buffer_name, size_format.first, size_format.second, readable_format.first,
-                        readable_format.second, (int)LOGGER_ENTRY_MAX_LEN,
-                        (int)LOGGER_ENTRY_MAX_PAYLOAD);
-                TEMP_FAILURE_RETRY(write(output_fd_.get(), str.data(), str.length()));
+                        buffer_name, size_format.first, size_format.second, consumed_format.first,
+                        consumed_format.second, readable_format.first, readable_format.second,
+                        (int)LOGGER_ENTRY_MAX_LEN, (int)LOGGER_ENTRY_MAX_PAYLOAD);
+                if (!WriteFully(output_fd_, str.data(), str.length())) {
+                    error(EXIT_FAILURE, errno, "Failed to write to output fd");
+                }
             }
         }
     }
@@ -1129,7 +1067,9 @@ int Logcat::Run(int argc, char** argv) {
         if (*cp == '\n') ++cp;
 
         size_t len = strlen(cp);
-        TEMP_FAILURE_RETRY(write(output_fd_.get(), cp, len));
+        if (!WriteFully(output_fd_, cp, len)) {
+            error(EXIT_FAILURE, errno, "Failed to write to output fd");
+        }
         return EXIT_SUCCESS;
     }
 
@@ -1166,10 +1106,14 @@ If you have enabled significant logging, look into using the -G option to increa
                   LOG_ID_MAX);
         }
 
-        PrintDividers(log_msg.id(), printDividers);
+        if (!uids.empty() && uids.count(log_msg.entry.uid) == 0) {
+            continue;
+        }
 
         if (print_binary_) {
-            TEMP_FAILURE_RETRY(write(output_fd_.get(), &log_msg, log_msg.len()));
+            if (!WriteFully(output_fd_, &log_msg, log_msg.len())) {
+                error(EXIT_FAILURE, errno, "Failed to write to output fd");
+            }
         } else {
             ProcessBuffer(&log_msg);
         }

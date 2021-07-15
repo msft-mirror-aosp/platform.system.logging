@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "LogKlog.h"
+
 #include <ctype.h>
 #include <errno.h>
 #include <inttypes.h>
@@ -29,8 +31,6 @@
 #include <private/android_logger.h>
 
 #include "LogBuffer.h"
-#include "LogKlog.h"
-#include "LogReader.h"
 
 #define KMSG_PRIORITY(PRI) \
     '<', '0' + (LOG_SYSLOG | (PRI)) / 10, '0' + (LOG_SYSLOG | (PRI)) % 10, '>'
@@ -201,15 +201,14 @@ log_time LogKlog::correction = (log_time(CLOCK_REALTIME) < log_time(CLOCK_MONOTO
                                        ? log_time(log_time::EPOCH)
                                        : (log_time(CLOCK_REALTIME) - log_time(CLOCK_MONOTONIC));
 
-LogKlog::LogKlog(LogBuffer* buf, LogReader* reader, int fdWrite, int fdRead,
-                 bool auditd)
+LogKlog::LogKlog(LogBuffer* buf, int fdWrite, int fdRead, bool auditd, LogStatistics* stats)
     : SocketListener(fdRead, false),
       logbuf(buf),
-      reader(reader),
       signature(CLOCK_MONOTONIC),
       initialized(false),
       enableLogging(true),
-      auditd(auditd) {
+      auditd(auditd),
+      stats_(stats) {
     static const char klogd_message[] = "%s%s%" PRIu64 "\n";
     char buffer[strlen(priority_message) + strlen(klogdStr) +
                 strlen(klogd_message) + 20];
@@ -309,8 +308,6 @@ log_time LogKlog::sniffTime(const char*& buf, ssize_t len, bool reverse) {
         }
         buf = cp;
 
-        if (isMonotonic()) return now;
-
         const char* b;
         if (((b = android::strnstr(cp, len, suspendStr))) &&
             (((b += strlen(suspendStr)) - cp) < len)) {
@@ -356,11 +353,7 @@ log_time LogKlog::sniffTime(const char*& buf, ssize_t len, bool reverse) {
 
         convertMonotonicToReal(now);
     } else {
-        if (isMonotonic()) {
-            now = log_time(CLOCK_MONOTONIC);
-        } else {
-            now = log_time(CLOCK_REALTIME);
-        }
+        now = log_time(CLOCK_REALTIME);
     }
     return now;
 }
@@ -374,39 +367,37 @@ pid_t LogKlog::sniffPid(const char*& buf, ssize_t len) {
     if (((ssize_t)strnlen(cp, len) == len) && cp[len]) {
         return 0;
     }
-    // HTC kernels with modified printk "c0   1648 "
-    if ((len > 9) && (cp[0] == 'c') && isdigit(cp[1]) &&
-        (isdigit(cp[2]) || (cp[2] == ' ')) && (cp[3] == ' ')) {
-        bool gotDigit = false;
-        int i;
-        for (i = 4; i < 9; ++i) {
-            if (isdigit(cp[i])) {
-                gotDigit = true;
-            } else if (gotDigit || (cp[i] != ' ')) {
-                break;
-            }
-        }
-        if ((i == 9) && (cp[i] == ' ')) {
-            int pid = 0;
-            char dummy;
-            if (sscanf(cp + 4, "%d%c", &pid, &dummy) == 2) {
-                buf = cp + 10;  // skip-it-all
-                return pid;
-            }
-        }
-    }
     while (len) {
         // Mediatek kernels with modified printk
         if (*cp == '[') {
             int pid = 0;
-            char dummy;
-            if (sscanf(cp, "[%d:%*[a-z_./0-9:A-Z]]%c", &pid, &dummy) == 2) {
+            char placeholder;
+            if (sscanf(cp, "[%d:%*[a-z_./0-9:A-Z]]%c", &pid, &placeholder) == 2) {
                 return pid;
             }
             break;  // Only the first one
         }
         ++cp;
         --len;
+    }
+    if (len > 8 && cp[0] == '[' && cp[7] == ']' && isdigit(cp[6])) {
+        // Linux 5.10 and above, e.g. "[    T1] init: init first stage started!"
+        int i = 5;
+        while (i > 1 && isdigit(cp[i])) {
+            --i;
+        }
+        int pos = i + 1;
+        if (cp[i] != 'T') {
+            return 0;
+        }
+        while (i > 1) {
+            --i;
+            if (cp[i] != ' ') {
+                return 0;
+            }
+        }
+        buf = cp + 8;
+        return atoi(cp + pos);
     }
     return 0;
 }
@@ -429,45 +420,6 @@ static int parseKernelPrio(const char*& buf, ssize_t len) {
         buf = cp;
     }
     return pri;
-}
-
-// Passed the entire SYSLOG_ACTION_READ_ALL buffer and interpret a
-// compensated start time.
-void LogKlog::synchronize(const char* buf, ssize_t len) {
-    const char* cp = android::strnstr(buf, len, suspendStr);
-    if (!cp) {
-        cp = android::strnstr(buf, len, resumeStr);
-        if (!cp) return;
-    } else {
-        const char* rp = android::strnstr(buf, len, resumeStr);
-        if (rp && (rp < cp)) cp = rp;
-    }
-
-    do {
-        --cp;
-    } while ((cp > buf) && (*cp != '\n'));
-    if (*cp == '\n') {
-        ++cp;
-    }
-    parseKernelPrio(cp, len - (cp - buf));
-
-    log_time now = sniffTime(cp, len - (cp - buf), true);
-
-    const char* suspended = android::strnstr(buf, len, suspendedStr);
-    if (!suspended || (suspended > cp)) {
-        return;
-    }
-    cp = suspended;
-
-    do {
-        --cp;
-    } while ((cp > buf) && (*cp != '\n'));
-    if (*cp == '\n') {
-        ++cp;
-    }
-    parseKernelPrio(cp, len - (cp - buf));
-
-    sniffTime(cp, len - (cp - buf), true);
 }
 
 // Convert kernel log priority number into an Android Logger priority number
@@ -573,9 +525,7 @@ int LogKlog::log(const char* buf, ssize_t len) {
     const pid_t tid = pid;
     uid_t uid = AID_ROOT;
     if (pid) {
-        logbuf->wrlock();
-        uid = logbuf->pidToUid(pid);
-        logbuf->unlock();
+        uid = stats_->PidToUid(pid);
     }
 
     // Parse (rules at top) to pull out a tag from the incoming kernel message.
@@ -713,10 +663,9 @@ int LogKlog::log(const char* buf, ssize_t len) {
         ((size == 2) && (isdigit(tag[0]) || isdigit(tag[1]))) ||
         // register names like x18 but not driver names like en0
         ((size == 3) && (isdigit(tag[1]) && isdigit(tag[2]))) ||
-        // blacklist
+        // ignore
         ((size == cpuLen) && !fastcmp<strncmp>(tag, cpu, cpuLen)) ||
-        ((size == warningLen) &&
-         !fastcmp<strncasecmp>(tag, warning, warningLen)) ||
+        ((size == warningLen) && !fastcmp<strncasecmp>(tag, warning, warningLen)) ||
         ((size == errorLen) && !fastcmp<strncasecmp>(tag, error, errorLen)) ||
         ((size == infoLen) && !fastcmp<strncasecmp>(tag, info, infoLen))) {
         p = start;
@@ -752,7 +701,7 @@ int LogKlog::log(const char* buf, ssize_t len) {
         p = " ";
         b = 1;
     }
-    // paranoid sanity check, can not happen ...
+    // This shouldn't happen, but clamp the size if it does.
     if (b > LOGGER_ENTRY_MAX_PAYLOAD) {
         b = LOGGER_ENTRY_MAX_PAYLOAD;
     }
@@ -761,7 +710,7 @@ int LogKlog::log(const char* buf, ssize_t len) {
     }
     // calculate buffer copy requirements
     ssize_t n = 1 + taglen + 1 + b + 1;
-    // paranoid sanity check, first two just can not happen ...
+    // Extra checks for likely impossible cases.
     if ((taglen > n) || (b > n) || (n > (ssize_t)USHRT_MAX) || (n <= 0)) {
         return -EINVAL;
     }
@@ -771,7 +720,7 @@ int LogKlog::log(const char* buf, ssize_t len) {
     // If we malloc'd this buffer, we could get away without n's USHRT_MAX
     // test above, but we would then required a max(n, USHRT_MAX) as
     // truncating length argument to logbuf->log() below. Gain is protection
-    // of stack sanity and speedup, loss is truncated long-line content.
+    // against stack corruption and speedup, loss is truncated long-line content.
     char newstr[n];
     char* np = newstr;
 
@@ -789,7 +738,7 @@ int LogKlog::log(const char* buf, ssize_t len) {
     memcpy(np, p, b);
     np[b] = '\0';
 
-    if (!isMonotonic()) {
+    {
         // Watch out for singular race conditions with timezone causing near
         // integer quarter-hour jumps in the time and compensate accordingly.
         // Entries will be temporal within near_seconds * 2. b/21868540
@@ -815,12 +764,7 @@ int LogKlog::log(const char* buf, ssize_t len) {
     }
 
     // Log message
-    int rc = logbuf->log(LOG_ID_KERNEL, now, uid, pid, tid, newstr, (uint16_t)n);
-
-    // notify readers
-    if (rc > 0) {
-        reader->notifyNewLog(static_cast<log_mask_t>(1 << LOG_ID_KERNEL));
-    }
+    int rc = logbuf->Log(LOG_ID_KERNEL, now, uid, pid, tid, newstr, (uint16_t)n);
 
     return rc;
 }
