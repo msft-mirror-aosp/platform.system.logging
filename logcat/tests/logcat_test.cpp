@@ -16,6 +16,7 @@
 
 #include <ctype.h>
 #include <dirent.h>
+#include <pwd.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -28,10 +29,12 @@
 #include <unistd.h>
 
 #include <memory>
+#include <regex>
 #include <string>
 
 #include <android-base/file.h>
 #include <android-base/macros.h>
+#include <android-base/parseint.h>
 #include <android-base/stringprintf.h>
 #include <android-base/strings.h>
 #include <gtest/gtest.h>
@@ -140,8 +143,8 @@ TEST(logcat, event_tag_filter) {
 
     pclose(fp);
 
-    // logcat, liblogcat and logcatd test instances result in the progression
-    // of 3, 6 and 9 for our counts as each round is performed.
+    // logcat and logcatd test instances result in the progression
+    // of 3, 6, and 9 for our counts as each round is performed.
     EXPECT_GE(count, 3);
     EXPECT_LE(count, 9);
     EXPECT_EQ(count % 3, 0);
@@ -174,11 +177,6 @@ static size_t inject(ssize_t count) {
 }
 
 TEST(logcat, year) {
-    if (android_log_clockid() == CLOCK_MONOTONIC) {
-        fprintf(stderr, "Skipping test, logd is monotonic time\n");
-        return;
-    }
-
     int count;
     int tries = 3;  // in case run too soon after system start or buffer clear
 
@@ -249,11 +247,6 @@ static char* fgetLongTime(char* buffer, size_t buflen, FILE* fp) {
 }
 
 TEST(logcat, tz) {
-    if (android_log_clockid() == CLOCK_MONOTONIC) {
-        fprintf(stderr, "Skipping test, logd is monotonic time\n");
-        return;
-    }
-
     int tries = 4;  // in case run too soon after system start or buffer clear
     int count;
 
@@ -485,8 +478,8 @@ TEST(logcat, End_to_End) {
             continue;
         }
 
-        log_time tx((const char*)&t);
-        if (ts == tx) {
+        log_time* tx = reinterpret_cast<log_time*>(&t);
+        if (ts == *tx) {
             ++count;
         }
     }
@@ -531,8 +524,8 @@ TEST(logcat, End_to_End_multitude) {
                 continue;
             }
 
-            log_time tx((const char*)&t);
-            if (ts == tx) {
+            log_time* tx = reinterpret_cast<log_time*>(&t);
+            if (ts == *tx) {
                 ++count;
             }
         }
@@ -546,7 +539,6 @@ TEST(logcat, End_to_End_multitude) {
 static int get_groups(const char* cmd) {
     FILE* fp;
 
-    // NB: crash log only available in user space
     EXPECT_TRUE(NULL != (fp = popen(cmd, "r")));
 
     if (fp == NULL) {
@@ -558,17 +550,18 @@ static int get_groups(const char* cmd) {
     int count = 0;
 
     while (fgets(buffer, sizeof(buffer), fp)) {
-        int size, consumed, max, payload;
-        char size_mult[4], consumed_mult[4];
+        int size, consumed, readable, max, payload;
+        char size_mult[4], consumed_mult[4], readable_mult[4];
         long full_size, full_consumed;
 
         size = consumed = max = payload = 0;
         // NB: crash log can be very small, not hit a Kb of consumed space
         //     doubly lucky we are not including it.
-        EXPECT_EQ(6, sscanf(buffer,
-                            "%*s ring buffer is %d %3s (%d %3s consumed),"
+        EXPECT_EQ(8, sscanf(buffer,
+                            "%*s ring buffer is %d %3s (%d %3s consumed, %d %3s readable),"
                             " max entry is %d B, max payload is %d B",
-                            &size, size_mult, &consumed, consumed_mult, &max, &payload))
+                            &size, size_mult, &consumed, consumed_mult, &readable, readable_mult,
+                            &max, &payload))
                 << "Parse error on: " << buffer;
         full_size = size;
         switch (size_mult[0]) {
@@ -1231,13 +1224,14 @@ TEST(logcat, blocking_clear) {
             break;
         }
 
-        int size, consumed, max, payload;
-        char size_mult[4], consumed_mult[4];
+        int size, consumed, readable, max, payload;
+        char size_mult[4], consumed_mult[4], readable_mult[4];
         size = consumed = max = payload = 0;
-        if (6 == sscanf(buffer,
-                        "events: ring buffer is %d %3s (%d %3s consumed),"
+        if (8 == sscanf(buffer,
+                        "events: ring buffer is %d %3s (%d %3s consumed, %d %3s readable),"
                         " max entry is %d B, max payload is %d B",
-                        &size, size_mult, &consumed, consumed_mult, &max, &payload)) {
+                        &size, size_mult, &consumed, consumed_mult, &readable, readable_mult, &max,
+                        &payload)) {
             long full_size = size, full_consumed = consumed;
 
             switch (size_mult[0]) {
@@ -1308,7 +1302,7 @@ TEST(logcat, blocking_clear) {
 }
 #endif
 
-static bool get_white_black(char** list) {
+static bool get_prune_rules(char** list) {
     FILE* fp = popen(logcat_executable " -p 2>/dev/null", "r");
     if (fp == NULL) {
         fprintf(stderr, "ERROR: logcat -p 2>/dev/null\n");
@@ -1341,7 +1335,7 @@ static bool get_white_black(char** list) {
     return *list != NULL;
 }
 
-static bool set_white_black(const char* list) {
+static bool set_prune_rules(const char* list) {
     char buffer[BIG_BUFFER];
     snprintf(buffer, sizeof(buffer), logcat_executable " -P '%s' 2>&1",
              list ? list : "");
@@ -1370,28 +1364,28 @@ static bool set_white_black(const char* list) {
     return pclose(fp) == 0;
 }
 
-TEST(logcat, white_black_adjust) {
+TEST(logcat, prune_rules_adjust) {
     char* list = NULL;
     char* adjust = NULL;
 
-    get_white_black(&list);
+    get_prune_rules(&list);
 
     static const char adjustment[] = "~! 300/20 300/25 2000 ~1000/5 ~1000/30";
-    ASSERT_EQ(true, set_white_black(adjustment));
-    ASSERT_EQ(true, get_white_black(&adjust));
+    ASSERT_EQ(true, set_prune_rules(adjustment));
+    ASSERT_EQ(true, get_prune_rules(&adjust));
     EXPECT_STREQ(adjustment, adjust);
     free(adjust);
     adjust = NULL;
 
     static const char adjustment2[] = "300/20 300/21 2000 ~1000";
-    ASSERT_EQ(true, set_white_black(adjustment2));
-    ASSERT_EQ(true, get_white_black(&adjust));
+    ASSERT_EQ(true, set_prune_rules(adjustment2));
+    ASSERT_EQ(true, get_prune_rules(&adjust));
     EXPECT_STREQ(adjustment2, adjust);
     free(adjust);
     adjust = NULL;
 
-    ASSERT_EQ(true, set_white_black(list));
-    get_white_black(&adjust);
+    ASSERT_EQ(true, set_prune_rules(list));
+    get_prune_rules(&adjust);
     EXPECT_STREQ(list ? list : "", adjust ? adjust : "");
     free(adjust);
     adjust = NULL;
@@ -1661,68 +1655,6 @@ TEST(logcat, descriptive) {
         EXPECT_GE(ret, 0);
         EXPECT_TRUE(End_to_End(sync.tagStr, ""));
     }
-
-    {
-        // Invent new entries because existing can not serve
-        EventTagMap* map = android_openEventTagMap(nullptr);
-        ASSERT_TRUE(nullptr != map);
-        static const char name[] = logcat_executable ".descriptive-monotonic";
-        int myTag = android_lookupEventTagNum(map, name, "(new|1|s)",
-                                              ANDROID_LOG_UNKNOWN);
-        android_closeEventTagMap(map);
-        ASSERT_NE(-1, myTag);
-
-        const struct tag sync = { (uint32_t)myTag, name };
-
-        {
-            android_log_event_list ctx(sync.tagNo);
-            ctx << (uint32_t)7;
-            for (ret = -EBUSY; ret == -EBUSY; rest()) ret = ctx.write();
-            EXPECT_GE(ret, 0);
-            EXPECT_TRUE(End_to_End(sync.tagStr, "new=7s"));
-        }
-        {
-            android_log_event_list ctx(sync.tagNo);
-            ctx << (uint32_t)62;
-            for (ret = -EBUSY; ret == -EBUSY; rest()) ret = ctx.write();
-            EXPECT_GE(ret, 0);
-            EXPECT_TRUE(End_to_End(sync.tagStr, "new=1:02"));
-        }
-        {
-            android_log_event_list ctx(sync.tagNo);
-            ctx << (uint32_t)3673;
-            for (ret = -EBUSY; ret == -EBUSY; rest()) ret = ctx.write();
-            EXPECT_GE(ret, 0);
-            EXPECT_TRUE(End_to_End(sync.tagStr, "new=1:01:13"));
-        }
-        {
-            android_log_event_list ctx(sync.tagNo);
-            ctx << (uint32_t)(86400 + 7200 + 180 + 58);
-            for (ret = -EBUSY; ret == -EBUSY; rest()) ret = ctx.write();
-            EXPECT_GE(ret, 0);
-            EXPECT_TRUE(End_to_End(sync.tagStr, "new=1d 2:03:58"));
-        }
-    }
-}
-
-static bool reportedSecurity(const char* command) {
-    FILE* fp = popen(command, "r");
-    if (!fp) return true;
-
-    std::string ret;
-    bool val = android::base::ReadFdToString(fileno(fp), &ret);
-    pclose(fp);
-
-    if (!val) return true;
-    return std::string::npos != ret.find("'security'");
-}
-
-TEST(logcat, security) {
-    EXPECT_FALSE(reportedSecurity(logcat_executable " -b all -g 2>&1"));
-    EXPECT_TRUE(reportedSecurity(logcat_executable " -b security -g 2>&1"));
-    EXPECT_TRUE(reportedSecurity(logcat_executable " -b security -c 2>&1"));
-    EXPECT_TRUE(
-        reportedSecurity(logcat_executable " -b security -G 256K 2>&1"));
 }
 
 static size_t commandOutputSize(const char* command) {
@@ -1741,7 +1673,7 @@ TEST(logcat, help) {
     EXPECT_GT(logcatHelpTextSize, 4096UL);
     size_t logcatLastHelpTextSize =
         commandOutputSize(logcat_executable " -L -h 2>&1");
-#ifdef USING_LOGCAT_EXECUTABLE_DEFAULT  // logcat and liblogcat
+#ifdef USING_LOGCAT_EXECUTABLE_DEFAULT
     EXPECT_EQ(logcatHelpTextSize, logcatLastHelpTextSize);
 #else
     // logcatd -L -h prints the help twice, as designed.
@@ -1756,5 +1688,85 @@ TEST(logcat, invalid_buffer) {
   ASSERT_TRUE(android::base::ReadFdToString(fileno(fp), &output));
   pclose(fp);
 
-  ASSERT_TRUE(android::base::StartsWith(output, "unknown buffer foo\n"));
+  EXPECT_NE(std::string::npos, output.find("Unknown buffer 'foo'"));
+}
+
+static void SniffUid(const std::string& line, uid_t& uid) {
+    auto uid_regex = std::regex{"\\S+\\s+\\S+\\s+(\\S+).*"};
+
+    auto trimmed_line = android::base::Trim(line);
+
+    std::smatch match_results;
+    ASSERT_TRUE(std::regex_match(trimmed_line, match_results, uid_regex))
+            << "Unable to find UID in line '" << trimmed_line << "'";
+    auto uid_string = match_results[1];
+    if (!android::base::ParseUint(uid_string, &uid)) {
+        auto pwd = getpwnam(uid_string.str().c_str());
+        ASSERT_NE(nullptr, pwd) << "uid '" << uid_string << "' in line '" << trimmed_line << "'";
+        uid = pwd->pw_uid;
+    }
+}
+
+static void UidsInLog(std::optional<std::vector<uid_t>> filter_uid, std::map<uid_t, size_t>& uids) {
+    std::string command;
+    if (filter_uid) {
+        std::vector<std::string> uid_strings;
+        for (const auto& uid : *filter_uid) {
+            uid_strings.emplace_back(std::to_string(uid));
+        }
+        command = android::base::StringPrintf(logcat_executable
+                                              " -v uid -b all -d 2>/dev/null --uid=%s",
+                                              android::base::Join(uid_strings, ",").c_str());
+    } else {
+        command = logcat_executable " -v uid -b all -d 2>/dev/null";
+    }
+    auto fp = std::unique_ptr<FILE, decltype(&pclose)>(popen(command.c_str(), "r"), pclose);
+    ASSERT_NE(nullptr, fp);
+
+    char buffer[BIG_BUFFER];
+    while (fgets(buffer, sizeof(buffer), fp.get())) {
+        // Ignore dividers, e.g. '--------- beginning of radio'
+        if (android::base::StartsWith(buffer, "---------")) {
+            continue;
+        }
+        uid_t uid;
+        SniffUid(buffer, uid);
+        uids[uid]++;
+    }
+}
+
+static std::vector<uid_t> TopTwoInMap(const std::map<uid_t, size_t>& uids) {
+    std::pair<uid_t, size_t> top = {0, 0};
+    std::pair<uid_t, size_t> second = {0, 0};
+    for (const auto& [uid, count] : uids) {
+        if (count > top.second) {
+            top = second;
+            top = {uid, count};
+        } else if (count > second.second) {
+            second = {uid, count};
+        }
+    }
+    return {top.first, second.first};
+}
+
+TEST(logcat, uid_filter) {
+    std::map<uid_t, size_t> uids;
+    UidsInLog({}, uids);
+
+    ASSERT_GT(uids.size(), 2U);
+    auto top_uids = TopTwoInMap(uids);
+
+    // Test filtering with --uid=<top uid>
+    std::map<uid_t, size_t> uids_only_top;
+    std::vector<uid_t> top_uid = {top_uids[0]};
+    UidsInLog(top_uid, uids_only_top);
+
+    EXPECT_EQ(1U, uids_only_top.size());
+
+    // Test filtering with --uid=<top uid>,<2nd top uid>
+    std::map<uid_t, size_t> uids_only_top2;
+    std::vector<uid_t> top2_uids = {top_uids[0], top_uids[1]};
+    UidsInLog(top2_uids, uids_only_top2);
+
+    EXPECT_EQ(2U, uids_only_top2.size());
 }

@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "LogAudit.h"
+
 #include <ctype.h>
 #include <endian.h>
 #include <errno.h>
@@ -30,31 +32,30 @@
 #include <sstream>
 
 #include <android-base/macros.h>
-#include <log/log_properties.h>
+#include <android-base/properties.h>
 #include <private/android_filesystem_config.h>
 #include <private/android_logger.h>
 
-#include "LogAudit.h"
-#include "LogBuffer.h"
 #include "LogKlog.h"
-#include "LogReader.h"
 #include "LogUtils.h"
 #include "libaudit.h"
+
+using namespace std::string_literals;
+
+using android::base::GetBoolProperty;
 
 #define KMSG_PRIORITY(PRI)                               \
     '<', '0' + LOG_MAKEPRI(LOG_AUTH, LOG_PRI(PRI)) / 10, \
         '0' + LOG_MAKEPRI(LOG_AUTH, LOG_PRI(PRI)) % 10, '>'
 
-LogAudit::LogAudit(LogBuffer* buf, LogReader* reader, int fdDmesg)
+LogAudit::LogAudit(LogBuffer* buf, int fdDmesg, LogStatistics* stats)
     : SocketListener(getLogSocket(), false),
       logbuf(buf),
-      reader(reader),
       fdDmesg(fdDmesg),
-      main(__android_logger_property_get_bool("ro.logd.auditd.main",
-                                              BOOL_DEFAULT_TRUE)),
-      events(__android_logger_property_get_bool("ro.logd.auditd.events",
-                                                BOOL_DEFAULT_TRUE)),
-      initialized(false) {
+      main(GetBoolProperty("ro.logd.auditd.main", true)),
+      events(GetBoolProperty("ro.logd.auditd.events", true)),
+      initialized(false),
+      stats_(stats) {
     static const char auditd_message[] = { KMSG_PRIORITY(LOG_INFO),
                                            'l',
                                            'o',
@@ -141,10 +142,10 @@ std::string LogAudit::denialParse(const std::string& denial, char terminator,
     return "";
 }
 
-void LogAudit::auditParse(const std::string& string, uid_t uid,
-                          std::string* bug_num) {
+std::string LogAudit::auditParse(const std::string& string, uid_t uid) {
     static std::map<std::string, std::string> denial_to_bug =
         populateDenialMap();
+    std::string result;
     std::string scontext = denialParse(string, ':', "scontext=u:object_r:");
     std::string tcontext = denialParse(string, ':', "tcontext=u:object_r:");
     std::string tclass = denialParse(string, ' ', "tclass=");
@@ -156,20 +157,18 @@ void LogAudit::auditParse(const std::string& string, uid_t uid,
     }
     auto search = denial_to_bug.find(scontext + tcontext + tclass);
     if (search != denial_to_bug.end()) {
-        bug_num->assign(" " + search->second);
-    } else {
-        bug_num->assign("");
+        result = " bug=" + search->second;
     }
 
     // Ensure the uid name is not null before passing it to the bug string.
     if (uid >= AID_APP_START && uid <= AID_APP_END) {
         char* uidname = android::uidToName(uid);
         if (uidname) {
-            bug_num->append(" app=");
-            bug_num->append(uidname);
+            result.append(" app="s + uidname);
             free(uidname);
         }
     }
+    return result;
 }
 
 int LogAudit::logPrint(const char* fmt, ...) {
@@ -211,9 +210,7 @@ int LogAudit::logPrint(const char* fmt, ...) {
             ++cp;
         }
         tid = pid;
-        logbuf->wrlock();
-        uid = logbuf->pidToUid(pid);
-        logbuf->unlock();
+        uid = stats_->PidToUid(pid);
         memmove(pidptr, cp, strlen(cp) + 1);
     }
 
@@ -225,7 +222,7 @@ int LogAudit::logPrint(const char* fmt, ...) {
         static const char log_warning[] = { KMSG_PRIORITY(LOG_WARNING) };
         static const char newline[] = "\n";
 
-        auditParse(str, uid, &denial_metadata);
+        denial_metadata = auditParse(str, uid);
         iov[0].iov_base = info ? const_cast<char*>(log_info) : const_cast<char*>(log_warning);
         iov[0].iov_len = info ? sizeof(log_info) : sizeof(log_warning);
         iov[1].iov_base = str;
@@ -247,22 +244,10 @@ int LogAudit::logPrint(const char* fmt, ...) {
 
     static const char audit_str[] = " audit(";
     char* timeptr = strstr(str, audit_str);
-    if (timeptr &&
-        ((cp = now.strptime(timeptr + sizeof(audit_str) - 1, "%s.%q"))) &&
+    if (timeptr && ((cp = now.strptime(timeptr + sizeof(audit_str) - 1, "%s.%q"))) &&
         (*cp == ':')) {
         memcpy(timeptr + sizeof(audit_str) - 1, "0.0", 3);
         memmove(timeptr + sizeof(audit_str) - 1 + 3, cp, strlen(cp) + 1);
-        if (!isMonotonic()) {
-            if (android::isMonotonic(now)) {
-                LogKlog::convertMonotonicToReal(now);
-            }
-        } else {
-            if (!android::isMonotonic(now)) {
-                LogKlog::convertRealToMonotonic(now);
-            }
-        }
-    } else if (isMonotonic()) {
-        now = log_time(CLOCK_MONOTONIC);
     } else {
         now = log_time(CLOCK_REALTIME);
     }
@@ -271,13 +256,13 @@ int LogAudit::logPrint(const char* fmt, ...) {
 
     size_t str_len = strnlen(str, LOGGER_ENTRY_MAX_PAYLOAD);
     if (((fdDmesg < 0) || !initialized) && !hasMetadata(str, str_len))
-        auditParse(str, uid, &denial_metadata);
+        denial_metadata = auditParse(str, uid);
     str_len = (str_len + denial_metadata.length() <= LOGGER_ENTRY_MAX_PAYLOAD)
                   ? str_len + denial_metadata.length()
                   : LOGGER_ENTRY_MAX_PAYLOAD;
     size_t message_len = str_len + sizeof(android_log_event_string_t);
 
-    log_mask_t notify = 0;
+    unsigned int notify = 0;
 
     if (events) {  // begin scope for event buffer
         uint32_t buffer[(message_len + sizeof(uint32_t) - 1) / sizeof(uint32_t)];
@@ -291,9 +276,8 @@ int LogAudit::logPrint(const char* fmt, ...) {
         memcpy(event->data + str_len - denial_metadata.length(),
                denial_metadata.c_str(), denial_metadata.length());
 
-        rc = logbuf->log(
-            LOG_ID_EVENTS, now, uid, pid, tid, reinterpret_cast<char*>(event),
-            (message_len <= UINT16_MAX) ? (uint16_t)message_len : UINT16_MAX);
+        rc = logbuf->Log(LOG_ID_EVENTS, now, uid, pid, tid, reinterpret_cast<char*>(event),
+                         (message_len <= UINT16_MAX) ? (uint16_t)message_len : UINT16_MAX);
         if (rc >= 0) {
             notify |= 1 << LOG_ID_EVENTS;
         }
@@ -313,9 +297,7 @@ int LogAudit::logPrint(const char* fmt, ...) {
         pid = tid;
         comm = "auditd";
     } else {
-        logbuf->wrlock();
-        comm = commfree = logbuf->pidToName(pid);
-        logbuf->unlock();
+        comm = commfree = stats_->PidToName(pid);
         if (!comm) {
             comm = "unknown";
         }
@@ -347,9 +329,8 @@ int LogAudit::logPrint(const char* fmt, ...) {
         strncpy(newstr + 1 + str_len + prefix_len + suffix_len,
                 denial_metadata.c_str(), denial_metadata.length());
 
-        rc = logbuf->log(
-            LOG_ID_MAIN, now, uid, pid, tid, newstr,
-            (message_len <= UINT16_MAX) ? (uint16_t)message_len : UINT16_MAX);
+        rc = logbuf->Log(LOG_ID_MAIN, now, uid, pid, tid, newstr,
+                         (message_len <= UINT16_MAX) ? (uint16_t)message_len : UINT16_MAX);
 
         if (rc >= 0) {
             notify |= 1 << LOG_ID_MAIN;
@@ -361,7 +342,6 @@ int LogAudit::logPrint(const char* fmt, ...) {
     free(str);
 
     if (notify) {
-        reader->notifyNewLog(notify);
         if (rc < 0) {
             rc = message_len;
         }

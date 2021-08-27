@@ -14,43 +14,37 @@
  * limitations under the License.
  */
 
-#ifndef _LOGD_LOG_AUDIT_H__
-#define _LOGD_LOG_AUDIT_H__
+#pragma once
 
 #include <map>
 
 #include <sysutils/SocketListener.h>
 
 #include "LogBuffer.h"
-
-class LogReader;
+#include "LogStatistics.h"
 
 class LogAudit : public SocketListener {
     LogBuffer* logbuf;
-    LogReader* reader;
     int fdDmesg;  // fdDmesg >= 0 is functionally bool dmesg
     bool main;
     bool events;
     bool initialized;
 
-   public:
-    LogAudit(LogBuffer* buf, LogReader* reader, int fdDmesg);
+  public:
+    LogAudit(LogBuffer* buf, int fdDmesg, LogStatistics* stats);
     int log(char* buf, size_t len);
-    bool isMonotonic() {
-        return logbuf->isMonotonic();
-    }
 
-   protected:
+  protected:
     virtual bool onDataAvailable(SocketClient* cli);
 
-   private:
+  private:
     static int getLogSocket();
     std::map<std::string, std::string> populateDenialMap();
     std::string denialParse(const std::string& denial, char terminator,
                             const std::string& search_term);
-    void auditParse(const std::string& string, uid_t uid, std::string* bug_num);
+    std::string auditParse(const std::string& string, uid_t uid);
     int logPrint(const char* fmt, ...)
         __attribute__((__format__(__printf__, 2, 3)));
-};
 
-#endif
+    LogStatistics* stats_;
+};
