@@ -34,7 +34,6 @@ class LogWriter {
     uid_t uid() const { return uid_; }
 
     bool privileged() const { return privileged_; }
-    void revoke() { privileged_ = false; }
 
   private:
     uid_t uid_;
