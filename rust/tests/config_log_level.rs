@@ -9,7 +9,7 @@ fn config_log_level() {
         logger::Config::default()
             .with_min_level(log::Level::Trace));
 
-    assert!(init_result);
+    assert_eq!(init_result, true);
     // Setting the level through the Config struct should impact both host and device
     assert_eq!(log::max_level(), log::LevelFilter::Trace);
 
