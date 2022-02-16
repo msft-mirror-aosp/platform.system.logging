@@ -267,7 +267,8 @@ static void BM_pmsg_short_aligned(benchmark::State& state) {
     android_log_header_t header;
     android_log_event_int_t payload;
   };
-  alignas(8) char buf[sizeof(struct packet) + 8] = {};
+  alignas(8) char buf[sizeof(struct packet) + 8];
+  memset(buf, 0, sizeof(buf));
   struct packet* buffer = (struct packet*)(((uintptr_t)buf + 7) & ~7);
   if (((uintptr_t)&buffer->pmsg_header) & 7) {
     fprintf(stderr, "&buffer=0x%p iterations=%" PRIu64 "\n", &buffer->pmsg_header,
@@ -341,7 +342,8 @@ static void BM_pmsg_short_unaligned1(benchmark::State& state) {
     android_log_header_t header;
     android_log_event_int_t payload;
   };
-  alignas(8) char buf[sizeof(struct packet) + 8] = {};
+  alignas(8) char buf[sizeof(struct packet) + 8];
+  memset(buf, 0, sizeof(buf));
   struct packet* buffer = (struct packet*)((((uintptr_t)buf + 7) & ~7) + 1);
   if ((((uintptr_t)&buffer->pmsg_header) & 7) != 1) {
     fprintf(stderr, "&buffer=0x%p iterations=%" PRIu64 "\n", &buffer->pmsg_header,
@@ -415,7 +417,8 @@ static void BM_pmsg_long_aligned(benchmark::State& state) {
     android_log_header_t header;
     android_log_event_int_t payload;
   };
-  alignas(8) char buf[sizeof(struct packet) + 8 + LOGGER_ENTRY_MAX_PAYLOAD] = {};
+  alignas(8) char buf[sizeof(struct packet) + 8 + LOGGER_ENTRY_MAX_PAYLOAD];
+  memset(buf, 0, sizeof(buf));
   struct packet* buffer = (struct packet*)(((uintptr_t)buf + 7) & ~7);
   if (((uintptr_t)&buffer->pmsg_header) & 7) {
     fprintf(stderr, "&buffer=0x%p iterations=%" PRIu64 "\n", &buffer->pmsg_header,
@@ -487,7 +490,8 @@ static void BM_pmsg_long_unaligned1(benchmark::State& state) {
     android_log_header_t header;
     android_log_event_int_t payload;
   };
-  alignas(8) char buf[sizeof(struct packet) + 8 + LOGGER_ENTRY_MAX_PAYLOAD] = {};
+  alignas(8) char buf[sizeof(struct packet) + 8 + LOGGER_ENTRY_MAX_PAYLOAD];
+  memset(buf, 0, sizeof(buf));
   struct packet* buffer = (struct packet*)((((uintptr_t)buf + 7) & ~7) + 1);
   if ((((uintptr_t)&buffer->pmsg_header) & 7) != 1) {
     fprintf(stderr, "&buffer=0x%p iterations=%" PRIu64 "\n", &buffer->pmsg_header,
@@ -927,7 +931,8 @@ static void BM_lookupEventTagNum_logd_new(benchmark::State& state) {
   }
 
   while (state.KeepRunning()) {
-    char buffer[256] = {};
+    char buffer[256];
+    memset(buffer, 0, sizeof(buffer));
     log_time now(CLOCK_MONOTONIC);
     char name[64];
     snprintf(name, sizeof(name), "a%" PRIu64, now.nsec());
