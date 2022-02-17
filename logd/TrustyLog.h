@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 The Android Open Source Project
+ * Copyright (C) 2021 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,34 +16,23 @@
 
 #pragma once
 
-#include <map>
-
+#include <private/android_logger.h>
 #include <sysutils/SocketListener.h>
 
 #include "LogBuffer.h"
 #include "LogStatistics.h"
 
-class LogAudit : public SocketListener {
+/* Use SocketListener because it provides reader thread management and
+ * works well with the Trusty log device due to using poll() and not
+ * relying on blocking reads, which the Trusty log device does not support.
+ */
+class TrustyLog : public SocketListener {
     LogBuffer* logbuf;
-    int fdDmesg;  // fdDmesg >= 0 is functionally bool dmesg
-    bool main;
-    bool events;
-    bool initialized;
 
   public:
-    LogAudit(LogBuffer* buf, int fdDmesg, LogStatistics* stats);
-    int log(char* buf, size_t len);
+    static void create(LogBuffer* buf);
 
   protected:
     virtual bool onDataAvailable(SocketClient* cli);
-
-  private:
-    static int getLogSocket();
-    std::string denialParse(const std::string& denial, char terminator,
-                            const std::string& search_term);
-    std::string auditParse(const std::string& string, uid_t uid);
-    int logPrint(const char* fmt, ...)
-        __attribute__((__format__(__printf__, 2, 3)));
-
-    LogStatistics* stats_;
+    TrustyLog(LogBuffer* buf, int fdRead);
 };
