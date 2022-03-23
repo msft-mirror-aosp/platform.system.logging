@@ -1,6 +1,6 @@
 #[test]
 fn default_init() {
-    assert!(logger::init(Default::default()));
+    assert_eq!(logger::init(Default::default()), true);
 
     if cfg!(target_os = "android") {
         // android_logger has default log level "off"
