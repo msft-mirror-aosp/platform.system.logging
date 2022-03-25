@@ -108,11 +108,10 @@ void __android_log_close() {
 #endif
 }
 
-#if defined(__GLIBC__) || defined(_WIN32)
+// BSD-based systems like Android/macOS have getprogname(). Others need us to provide one.
+#if !defined(__APPLE__) && !defined(__BIONIC__)
 static const char* getprogname() {
-#if defined(__GLIBC__)
-  return program_invocation_short_name;
-#elif defined(_WIN32)
+#ifdef _WIN32
   static bool first = true;
   static char progname[MAX_PATH] = {};
 
@@ -129,6 +128,8 @@ static const char* getprogname() {
   }
 
   return progname;
+#else
+  return program_invocation_short_name;
 #endif
 }
 #endif
@@ -267,7 +268,7 @@ void __android_log_stderr_logger(const struct __android_log_message* log_message
             log_message->tag ? log_message->tag : "nullptr", priority_char, timestamp, getpid(),
             tid, log_message->file, log_message->line, log_message->message);
   } else {
-    fprintf(stderr, "%s %c %s %5d %5" PRIu64 " %s\n",
+    fprintf(stderr, "%s %c %s %5d %5" PRIu64 "] %s\n",
             log_message->tag ? log_message->tag : "nullptr", priority_char, timestamp, getpid(),
             tid, log_message->message);
   }
