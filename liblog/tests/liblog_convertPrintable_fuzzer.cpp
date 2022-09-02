@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2014 The Android Open Source Project
+ * Copyright 2022 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,13 +14,18 @@
  * limitations under the License.
  */
 
-#pragma once
+#include <fuzzer/FuzzedDataProvider.h>
 
-#include <sys/types.h>
+size_t convertPrintable(char* p, const char* message, size_t messageLen);
 
-#include <sysutils/SocketClient.h>
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t length) {
+  FuzzedDataProvider dataProvider(data, length);
+  std::string contents = dataProvider.ConsumeRemainingBytesAsString();
 
-bool clientHasLogCredentials(uid_t uid, gid_t gid, pid_t pid);
-bool clientHasLogCredentials(SocketClient* cli);
-bool clientCanWriteSecurityLog(uid_t uid, gid_t gid, pid_t pid);
-bool clientIsExemptedFromUserConsent(SocketClient* cli);
+  size_t size = convertPrintable(nullptr, contents.data(), contents.size());
+
+  char buf[size + 1];
+  convertPrintable(buf, contents.data(), contents.size());
+
+  return 0;
+}
