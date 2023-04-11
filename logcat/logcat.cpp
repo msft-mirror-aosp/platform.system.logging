@@ -272,11 +272,9 @@ void Logcat::SetupOutputAndSchedulingPolicy(bool blocking) {
 
 // clang-format off
 static void show_help() {
-    const char* cmd = getprogname();
+    printf(R"logcat(
+  Usage: logcat [OPTION]... [FILTERSPEC]...
 
-    fprintf(stderr, "Usage: %s [OPTION]... [FILTERSPEC]...\n", cmd);
-
-    fprintf(stderr, R"logcat(
   General options:
 
   -b BUFFER, --buffer=BUFFER
@@ -795,7 +793,7 @@ int Logcat::Run(int argc, char** argv) {
                 return EXIT_SUCCESS;
 
             case '?':
-                error(EXIT_FAILURE, 0, "Unknown option '%s'.", argv[optind - 1]);
+                error(EXIT_FAILURE, 0, "Unknown option '%s'.", argv[optind]);
                 break;
 
             default:
