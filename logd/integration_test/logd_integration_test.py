@@ -26,7 +26,6 @@ KNOWN_NON_LOGGING_SERVICES = [
 ]
 
 KNOWN_LOGGING_SERVICES = [
-    "vendor.wifi_hal_legacy",
     "zygote",
 
     # b/210919187 - main log is too busy, gets dropped off
@@ -35,6 +34,10 @@ KNOWN_LOGGING_SERVICES = [
 
     "SELF_TEST_SERVICE_DOES_NOT_EXIST",
 ]
+
+def device_log(log):
+    ret = subprocess.check_output(["adb", "shell", "log", "-t", "logd_integration_test", log]).decode()
+    assert len(ret) == 0, f"Expected no output, but found '{ret}'"
 
 def get_service_pid(svc):
     return int(subprocess.check_output(["adb", "shell", "getprop", "init.svc_debug_pid." + svc]))
@@ -59,7 +62,7 @@ def iter_service_pids(test_case, services):
 
 def get_dropped_logs(test_case, buffer):
         output = subprocess.check_output(["adb", "logcat", "-b", buffer, "--statistics"]).decode()
-        output = iter(output.split("\n"))
+        lines = iter(output.split("\n"))
 
         res = []
 
@@ -71,25 +74,41 @@ def get_dropped_logs(test_case, buffer):
         for indication in ["Total", "Now"]:
             reLineCount = re.compile(f"^{indication}.*\s+[0-9]+/([0-9]+)")
             while True:
-                line = next(output)
+                line = next(lines)
                 match = reLineCount.match(line)
                 if match:
                     res.append(int(match.group(1)))
                     break
 
         total, now = res
-        return total - now
+        return total, now, output
 
 class LogdIntegrationTest(unittest.TestCase):
+    def subTest(self, subtest_name):
+        """install logger for all subtests"""
+
+        class SubTestLogger:
+            def __init__(self, testcase, subtest_name):
+                self.subtest_name = subtest_name
+                self.subtest = testcase.subTest(subtest_name)
+            def __enter__(self):
+                device_log(f"Starting subtest {subtest_name}")
+                return self.subtest.__enter__()
+            def __exit__(self, *args):
+                device_log(f"Ending subtest {subtest_name}")
+                return self.subtest.__exit__(*args)
+
+        return SubTestLogger(super(), subtest_name)
+
     def test_no_logs(self):
         for service, pid in iter_service_pids(self, KNOWN_NON_LOGGING_SERVICES):
-            with self.subTest(service):
+            with self.subTest(service + "_no_logs"):
                 lines = get_pid_logs(pid)
                 self.assertFalse("\n" in lines, f"{service} ({pid}) shouldn't have logs, but found: {lines}")
 
     def test_has_logs(self):
         for service, pid in iter_service_pids(self, KNOWN_LOGGING_SERVICES):
-            with self.subTest(service):
+            with self.subTest(service + "_has_logs"):
                 lines = get_pid_logs(pid)
                 self.assertTrue("\n" in lines, f"{service} ({pid}) should have logs, but found: {lines}")
 
@@ -102,10 +121,12 @@ class LogdIntegrationTest(unittest.TestCase):
         }
 
         for buffer, allowed in dropped_buffer_allowed.items():
-            dropped = get_dropped_logs(self, buffer)
+            with self.subTest(buffer + "_buffer_not_dropped"):
+                total, now, output = get_dropped_logs(self, buffer)
+                dropped = total - now
 
-            self.assertLessEqual(dropped, allowed,
-                f"Buffer {buffer} has {dropped} dropped logs, but expecting <= {allowed}")
+                self.assertLessEqual(dropped, allowed,
+                    f"Buffer {buffer} has {dropped} dropped logs (now {now} out of {total} total logs), but expecting <= {allowed}. {output}")
 
 def main():
     unittest.main(verbosity=3)
