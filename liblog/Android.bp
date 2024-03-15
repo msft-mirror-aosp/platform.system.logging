@@ -184,7 +184,7 @@ cc_library_static {
     ],
     visibility: [
         "//bionic/linker",
-        "//frameworks/libs/native_bridge_support/linker",
+        "//frameworks/libs/native_bridge_support/android_api/linker",
         "//system/apex/libs/libapexutil",
         "//system/core/debuggerd",
         "//system/linkerconfig",
@@ -229,6 +229,8 @@ rust_bindgen {
         "--allowlist-function=__android_log_security",
         "--allowlist-type=log_id",
     ],
+    vendor_available: true,
+    product_available: true,
 }
 
 rust_test {
