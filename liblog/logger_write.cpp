@@ -481,43 +481,28 @@ void __android_log_assert(const char* cond, const char* tag, const char* fmt, ..
   abort();
 }
 
-int __android_log_bwrite(int32_t tag, const void* payload, size_t len) {
+static int __android_log_buf_bwrite(log_id_t log, int32_t tag, const void* payload, size_t len) {
   ErrnoRestorer errno_restorer;
 
-  struct iovec vec[2];
-
+  iovec vec[2];
   vec[0].iov_base = &tag;
   vec[0].iov_len = sizeof(tag);
-  vec[1].iov_base = (void*)payload;
+  vec[1].iov_base = const_cast<void*>(payload);
   vec[1].iov_len = len;
 
-  return write_to_log(LOG_ID_EVENTS, vec, 2);
+  return write_to_log(log, vec, 2);
+}
+
+int __android_log_bwrite(int32_t tag, const void* payload, size_t len) {
+  return __android_log_buf_bwrite(LOG_ID_EVENTS, tag, payload, len);
 }
 
 int __android_log_stats_bwrite(int32_t tag, const void* payload, size_t len) {
-  ErrnoRestorer errno_restorer;
-
-  struct iovec vec[2];
-
-  vec[0].iov_base = &tag;
-  vec[0].iov_len = sizeof(tag);
-  vec[1].iov_base = (void*)payload;
-  vec[1].iov_len = len;
-
-  return write_to_log(LOG_ID_STATS, vec, 2);
+  return __android_log_buf_bwrite(LOG_ID_STATS, tag, payload, len);
 }
 
 int __android_log_security_bwrite(int32_t tag, const void* payload, size_t len) {
-  ErrnoRestorer errno_restorer;
-
-  struct iovec vec[2];
-
-  vec[0].iov_base = &tag;
-  vec[0].iov_len = sizeof(tag);
-  vec[1].iov_base = (void*)payload;
-  vec[1].iov_len = len;
-
-  return write_to_log(LOG_ID_SECURITY, vec, 2);
+  return __android_log_buf_bwrite(LOG_ID_SECURITY, tag, payload, len);
 }
 
 /*
@@ -528,60 +513,40 @@ int __android_log_security_bwrite(int32_t tag, const void* payload, size_t len) 
 int __android_log_btwrite(int32_t tag, char type, const void* payload, size_t len) {
   ErrnoRestorer errno_restorer;
 
-  struct iovec vec[3];
-
+  iovec vec[3];
   vec[0].iov_base = &tag;
   vec[0].iov_len = sizeof(tag);
   vec[1].iov_base = &type;
   vec[1].iov_len = sizeof(type);
-  vec[2].iov_base = (void*)payload;
+  vec[2].iov_base = const_cast<void*>(payload);
   vec[2].iov_len = len;
 
   return write_to_log(LOG_ID_EVENTS, vec, 3);
 }
 
-/*
- * Like __android_log_bwrite, but used for writing strings to the
- * event log.
- */
-int __android_log_bswrite(int32_t tag, const char* payload) {
+static int __android_log_buf_bswrite(log_id_t log, int32_t tag, const char* str) {
   ErrnoRestorer errno_restorer;
 
-  struct iovec vec[4];
   char type = EVENT_TYPE_STRING;
-  uint32_t len = strlen(payload);
+  uint32_t len = strlen(str);
 
+  iovec vec[4];
   vec[0].iov_base = &tag;
   vec[0].iov_len = sizeof(tag);
   vec[1].iov_base = &type;
   vec[1].iov_len = sizeof(type);
   vec[2].iov_base = &len;
   vec[2].iov_len = sizeof(len);
-  vec[3].iov_base = (void*)payload;
+  vec[3].iov_base = const_cast<void*>(reinterpret_cast<const void*>(str));
   vec[3].iov_len = len;
 
-  return write_to_log(LOG_ID_EVENTS, vec, 4);
+  return write_to_log(log, vec, 4);
 }
 
-/*
- * Like __android_log_security_bwrite, but used for writing strings to the
- * security log.
- */
-int __android_log_security_bswrite(int32_t tag, const char* payload) {
-  ErrnoRestorer errno_restorer;
+int __android_log_bswrite(int32_t tag, const char* str) {
+  return __android_log_buf_bswrite(LOG_ID_EVENTS, tag, str);
+}
 
-  struct iovec vec[4];
-  char type = EVENT_TYPE_STRING;
-  uint32_t len = strlen(payload);
-
-  vec[0].iov_base = &tag;
-  vec[0].iov_len = sizeof(tag);
-  vec[1].iov_base = &type;
-  vec[1].iov_len = sizeof(type);
-  vec[2].iov_base = &len;
-  vec[2].iov_len = sizeof(len);
-  vec[3].iov_base = (void*)payload;
-  vec[3].iov_len = len;
-
-  return write_to_log(LOG_ID_SECURITY, vec, 4);
+int __android_log_security_bswrite(int32_t tag, const char* str) {
+  return __android_log_buf_bswrite(LOG_ID_SECURITY, tag, str);
 }
