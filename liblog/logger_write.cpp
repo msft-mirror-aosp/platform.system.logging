@@ -395,7 +395,8 @@ int __android_log_buf_write(int log_id, int prio, const char* tag, const char* m
   return 1;
 }
 
-int __android_log_vprint(int prio, const char* tag, const char* fmt, va_list ap) {
+static int __android_log_buf_vprint(int log_id, int prio,
+                                    const char* tag, const char* fmt, va_list ap) {
   ErrnoRestorer errno_restorer;
 
   if (!__android_log_is_loggable(prio, tag, ANDROID_LOG_VERBOSE)) {
@@ -405,51 +406,31 @@ int __android_log_vprint(int prio, const char* tag, const char* fmt, va_list ap)
   __attribute__((uninitialized)) char buf[LOG_BUF_SIZE];
 
   vsnprintf(buf, LOG_BUF_SIZE, fmt, ap);
-
-  __android_log_message log_message = {
-      sizeof(__android_log_message), LOG_ID_MAIN, prio, tag, nullptr, 0, buf};
-  __android_log_write_log_message(&log_message);
-  return 1;
-}
-
-int __android_log_print(int prio, const char* tag, const char* fmt, ...) {
-  ErrnoRestorer errno_restorer;
-
-  if (!__android_log_is_loggable(prio, tag, ANDROID_LOG_VERBOSE)) {
-    return -EPERM;
-  }
-
-  va_list ap;
-  __attribute__((uninitialized)) char buf[LOG_BUF_SIZE];
-
-  va_start(ap, fmt);
-  vsnprintf(buf, LOG_BUF_SIZE, fmt, ap);
-  va_end(ap);
-
-  __android_log_message log_message = {
-      sizeof(__android_log_message), LOG_ID_MAIN, prio, tag, nullptr, 0, buf};
-  __android_log_write_log_message(&log_message);
-  return 1;
-}
-
-int __android_log_buf_print(int log_id, int prio, const char* tag, const char* fmt, ...) {
-  ErrnoRestorer errno_restorer;
-
-  if (!__android_log_is_loggable(prio, tag, ANDROID_LOG_VERBOSE)) {
-    return -EPERM;
-  }
-
-  va_list ap;
-  __attribute__((uninitialized)) char buf[LOG_BUF_SIZE];
-
-  va_start(ap, fmt);
-  vsnprintf(buf, LOG_BUF_SIZE, fmt, ap);
-  va_end(ap);
 
   __android_log_message log_message = {
       sizeof(__android_log_message), log_id, prio, tag, nullptr, 0, buf};
   __android_log_write_log_message(&log_message);
   return 1;
+}
+
+int __android_log_vprint(int prio, const char* tag, const char* fmt, va_list ap) {
+  return __android_log_buf_vprint(LOG_ID_MAIN, prio, tag, fmt, ap);
+}
+
+int __android_log_print(int prio, const char* tag, const char* fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int result = __android_log_buf_vprint(LOG_ID_MAIN, prio, tag, fmt, ap);
+  va_end(ap);
+  return result;
+}
+
+int __android_log_buf_print(int log_id, int prio, const char* tag, const char* fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int result = __android_log_buf_vprint(log_id, prio, tag, fmt, ap);
+  va_end(ap);
+  return result;
 }
 
 void __android_log_assert(const char* cond, const char* tag, const char* fmt, ...) {
