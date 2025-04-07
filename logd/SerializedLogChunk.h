@@ -60,10 +60,10 @@ class SerializedLogChunk {
     ~SerializedLogChunk();
 
     void FinishWriting();
-    void IncReaderRefCount();
-    void DecReaderRefCount();
-    void AttachReader(SerializedFlushToState* reader);
-    void DetachReader(SerializedFlushToState* reader);
+    void IncReaderRefCount() REQUIRES(logd_lock);
+    void DecReaderRefCount() REQUIRES(logd_lock);
+    void AttachReader(SerializedFlushToState* reader) REQUIRES(logd_lock);
+    void DetachReader(SerializedFlushToState* reader) REQUIRES(logd_lock);
 
     void NotifyReadersOfPrune(log_id_t log_id) REQUIRES(logd_lock);
 

@@ -112,6 +112,8 @@ TEST(SerializedLogChunk, three_logs) {
 TEST_F(SerializedLogChunk_DeathTest, catch_DecCompressedRef_CHECK) {
     size_t chunk_size = 10 * 4096;
     auto chunk = SerializedLogChunk{chunk_size};
-    EXPECT_DEATH({ chunk.DecReaderRefCount(); }, "");
+    EXPECT_DEATH({
+      auto lock = std::lock_guard{logd_lock};
+      chunk.DecReaderRefCount();
+    }, "");
 }
-
