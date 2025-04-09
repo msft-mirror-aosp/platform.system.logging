@@ -59,7 +59,7 @@ class SerializedLogChunk {
     SerializedLogChunk(SerializedLogChunk&& other) noexcept = default;
     ~SerializedLogChunk();
 
-    void FinishWriting();
+    void FinishWriting() REQUIRES(logd_lock);
     void IncReaderRefCount() REQUIRES(logd_lock);
     void DecReaderRefCount() REQUIRES(logd_lock);
     void AttachReader(SerializedFlushToState* reader) REQUIRES(logd_lock);
@@ -67,9 +67,9 @@ class SerializedLogChunk {
 
     void NotifyReadersOfPrune(log_id_t log_id) REQUIRES(logd_lock);
 
-    bool CanLog(size_t len);
+    bool CanLog(size_t len) REQUIRES(logd_lock);
     SerializedLogEntry* Log(uint64_t sequence, log_time realtime, uid_t uid, pid_t pid, pid_t tid,
-                            const char* msg, uint16_t len);
+                            const char* msg, uint16_t len) REQUIRES(logd_lock);
 
     // If this buffer has been compressed, we only consider its compressed size when accounting for
     // memory consumption for pruning.  This is since the uncompressed log is only by used by
