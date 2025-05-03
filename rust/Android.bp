@@ -20,6 +20,9 @@ rust_library {
                 "libandroid_logger",
             ],
         },
+        windows: {
+            enabled: true,
+        },
     },
     apex_available: [
         "//apex_available:anyapex",
