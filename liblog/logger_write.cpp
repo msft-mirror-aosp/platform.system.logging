@@ -157,7 +157,7 @@ void __android_log_set_default_tag(const char* tag) {
   GetDefaultTag().assign(tag, 0, LOGGER_ENTRY_MAX_PAYLOAD);
 }
 
-static std::atomic_int32_t minimum_log_priority = ANDROID_LOG_DEFAULT;
+static std::atomic<int32_t> minimum_log_priority = ANDROID_LOG_DEFAULT;
 int32_t __android_log_set_minimum_priority(int32_t priority) {
   return minimum_log_priority.exchange(priority, std::memory_order_relaxed);
 }
