@@ -178,6 +178,7 @@ TEST(liblog, android_formatLogLine) {
   #define MSG "Destroyed 0 sockets, proto=IPPROTO_TCP, family=AF_INET6, states=14"
 
   AndroidLogEntry entry;
+  entry.tv_sec = entry.tv_nsec = 0;
   entry.priority = ANDROID_LOG_ERROR;
   entry.uid = entry.pid = entry.tid = 1234;
   entry.tag = TAG;
