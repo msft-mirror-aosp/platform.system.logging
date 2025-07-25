@@ -167,3 +167,132 @@ TEST(liblog, log_print_different_header_size) {
   ASSERT_EQ(0, android_log_processLogBuffer(reinterpret_cast<logger_entry*>(buf), &entry_odd_size));
   check_entry(entry_odd_size);
 }
+
+TEST(liblog, android_formatLogLine) {
+  setenv("TZ", "UTC", 1);
+  tzset();
+
+  AndroidLogFormat* formatter = android_log_format_new();
+
+  #define TAG "InetDiagMessage"
+  #define MSG "Destroyed 0 sockets, proto=IPPROTO_TCP, family=AF_INET6, states=14"
+
+  AndroidLogEntry entry;
+  entry.priority = ANDROID_LOG_ERROR;
+  entry.uid = entry.pid = entry.tid = 1234;
+  entry.tag = TAG;
+  entry.tagLen = strlen(entry.tag);
+  entry.message = MSG;
+  entry.messageLen = strlen(entry.message);
+
+  char buf[BUFSIZ];
+  size_t out_length;
+
+  android_log_setPrintFormat(formatter, android_log_formatFromString("brief"));
+  EXPECT_EQ(buf, android_log_formatLogLine(formatter, buf, sizeof(buf), &entry, &out_length));
+  EXPECT_EQ(93u, out_length);
+  buf[out_length] = '\0';
+  EXPECT_STREQ("E/" TAG "( 1234): " MSG "\n", buf);
+
+  android_log_setPrintFormat(formatter, android_log_formatFromString("process"));
+  EXPECT_EQ(buf, android_log_formatLogLine(formatter, buf, sizeof(buf), &entry, &out_length));
+  EXPECT_EQ(95u, out_length);
+  buf[out_length] = '\0';
+  EXPECT_STREQ("E( 1234) " MSG "  (" TAG ")\n", buf);
+
+  android_log_setPrintFormat(formatter, android_log_formatFromString("tag"));
+  EXPECT_EQ(buf, android_log_formatLogLine(formatter, buf, sizeof(buf), &entry, &out_length));
+  EXPECT_EQ(86u, out_length);
+  buf[out_length] = '\0';
+  EXPECT_STREQ("E/" TAG ": " MSG "\n", buf);
+
+  android_log_setPrintFormat(formatter, android_log_formatFromString("thread"));
+  EXPECT_EQ(buf, android_log_formatLogLine(formatter, buf, sizeof(buf), &entry, &out_length));
+  EXPECT_EQ(82u, out_length);
+  buf[out_length] = '\0';
+  EXPECT_STREQ("E( 1234: 1234) " MSG "\n", buf);
+
+  android_log_setPrintFormat(formatter, android_log_formatFromString("raw"));
+  EXPECT_EQ(buf, android_log_formatLogLine(formatter, buf, sizeof(buf), &entry, &out_length));
+  EXPECT_EQ(67u, out_length);
+  buf[out_length] = '\0';
+  EXPECT_STREQ(MSG "\n", buf);
+
+  android_log_setPrintFormat(formatter, android_log_formatFromString("time"));
+  EXPECT_EQ(buf, android_log_formatLogLine(formatter, buf, sizeof(buf), &entry, &out_length));
+  EXPECT_EQ(112u, out_length);
+  buf[out_length] = '\0';
+  EXPECT_STREQ("01-01 00:00:00.000 E/" TAG "( 1234): " MSG "\n", buf);
+
+  android_log_setPrintFormat(formatter, android_log_formatFromString("threadtime"));
+  EXPECT_EQ(buf, android_log_formatLogLine(formatter, buf, sizeof(buf), &entry, &out_length));
+  EXPECT_EQ(117u, out_length);
+  buf[out_length] = '\0';
+  EXPECT_STREQ("01-01 00:00:00.000  1234  1234 E " TAG ": " MSG "\n", buf);
+
+  android_log_setPrintFormat(formatter, android_log_formatFromString("long"));
+  EXPECT_EQ(buf, android_log_formatLogLine(formatter, buf, sizeof(buf), &entry, &out_length));
+  EXPECT_EQ(121u, out_length);
+  buf[out_length] = '\0';
+  EXPECT_STREQ("[ 01-01 00:00:00.000  1234: 1234 E/" TAG " ]\n" MSG "\n\n", buf);
+
+  android_log_setPrintFormat(formatter, android_log_formatFromString("color"));
+  EXPECT_EQ(buf, android_log_formatLogLine(formatter, buf, sizeof(buf), &entry, &out_length));
+  EXPECT_EQ(130u, out_length);
+  buf[out_length] = '\0';
+  EXPECT_STREQ("\x1B[31m[ 01-01 00:00:00.000  1234: 1234 E/" TAG " ]\n" MSG "\x1B[0m\n\n", buf);
+
+  android_log_setPrintFormat(formatter, android_log_formatFromString("usec"));
+  EXPECT_EQ(buf, android_log_formatLogLine(formatter, buf, sizeof(buf), &entry, &out_length));
+  EXPECT_EQ(133u, out_length);
+  buf[out_length] = '\0';
+  EXPECT_STREQ("\x1B[31m[ 01-01 00:00:00.000000  1234: 1234 E/" TAG " ]\n" MSG "\x1B[0m\n\n", buf);
+
+  android_log_setPrintFormat(formatter, android_log_formatFromString("nsec"));
+  EXPECT_EQ(buf, android_log_formatLogLine(formatter, buf, sizeof(buf), &entry, &out_length));
+  EXPECT_EQ(136u, out_length);
+  buf[out_length] = '\0';
+  EXPECT_STREQ("\x1B[31m[ 01-01 00:00:00.000000000  1234: 1234 E/" TAG " ]\n" MSG "\x1B[0m\n\n", buf);
+
+  android_log_setPrintFormat(formatter, android_log_formatFromString("printable"));
+  EXPECT_EQ(buf, android_log_formatLogLine(formatter, buf, sizeof(buf), &entry, &out_length));
+  EXPECT_EQ(136u, out_length);
+  buf[out_length] = '\0';
+  EXPECT_STREQ("\x1B[31m[ 01-01 00:00:00.000000000  1234: 1234 E/" TAG " ]\n" MSG "\x1B[0m\n\n", buf);
+
+  android_log_setPrintFormat(formatter, android_log_formatFromString("year"));
+  EXPECT_EQ(buf, android_log_formatLogLine(formatter, buf, sizeof(buf), &entry, &out_length));
+  EXPECT_EQ(141u, out_length);
+  buf[out_length] = '\0';
+  EXPECT_STREQ("\x1B[31m[ 1970-01-01 00:00:00.000000000  1234: 1234 E/" TAG " ]\n" MSG "\x1B[0m\n\n", buf);
+
+  android_log_setPrintFormat(formatter, android_log_formatFromString("zone"));
+  EXPECT_EQ(buf, android_log_formatLogLine(formatter, buf, sizeof(buf), &entry, &out_length));
+  EXPECT_EQ(147u, out_length);
+  buf[out_length] = '\0';
+  EXPECT_STREQ("\x1B[31m[ 1970-01-01 00:00:00.000000000 +0000  1234: 1234 E/" TAG " ]\n" MSG "\x1B[0m\n\n", buf);
+
+  android_log_setPrintFormat(formatter, android_log_formatFromString("epoch"));
+  EXPECT_EQ(buf, android_log_formatLogLine(formatter, buf, sizeof(buf), &entry, &out_length));
+  EXPECT_EQ(141u, out_length);
+  buf[out_length] = '\0';
+  EXPECT_STREQ("\x1B[31m[                   0.000000000  1234: 1234 E/" TAG " ]\n" MSG "\x1B[0m\n\n", buf);
+
+  android_log_setPrintFormat(formatter, android_log_formatFromString("monotonic"));
+  EXPECT_EQ(buf, android_log_formatLogLine(formatter, buf, sizeof(buf), &entry, &out_length));
+  EXPECT_EQ(128u, out_length);
+  buf[out_length] = '\0';
+  EXPECT_STREQ("\x1B[31m[      0.000000000  1234: 1234 E/" TAG " ]\n" MSG "\x1B[0m\n\n", buf);
+
+  android_log_setPrintFormat(formatter, android_log_formatFromString("uid"));
+  EXPECT_EQ(buf, android_log_formatLogLine(formatter, buf, sizeof(buf), &entry, &out_length));
+  EXPECT_EQ(134u, out_length);
+  buf[out_length] = '\0';
+  EXPECT_STREQ("\x1B[31m[      0.000000000  1234: 1234: 1234 E/" TAG " ]\n" MSG "\x1B[0m\n\n", buf);
+
+  android_log_setPrintFormat(formatter, android_log_formatFromString("descriptive"));
+  EXPECT_EQ(buf, android_log_formatLogLine(formatter, buf, sizeof(buf), &entry, &out_length));
+  EXPECT_EQ(134u, out_length);
+  buf[out_length] = '\0';
+  EXPECT_STREQ("\x1B[31m[      0.000000000  1234: 1234: 1234 E/" TAG " ]\n" MSG "\x1B[0m\n\n", buf);
+}
