@@ -1464,10 +1464,7 @@ TEST(logcat, maxcount) {
 }
 
 static bool End_to_End(const char* tag, const char* fmt, ...)
-#if defined(__GNUC__)
-    __attribute__((__format__(printf, 2, 3)))
-#endif
-    ;
+    __attribute__((__format__(printf, 2, 3)));
 
 static bool End_to_End(const char* tag, const char* fmt, ...) {
     FILE* fp = popen(logcat_executable " -v brief -b events -v descriptive -t 100 2>/dev/null", "r");
