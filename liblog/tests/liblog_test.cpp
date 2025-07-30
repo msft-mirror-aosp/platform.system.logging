@@ -1272,16 +1272,6 @@ TEST(liblog, filterRule) {
 
   EXPECT_TRUE(android_log_addFilterString(p_format, "*:s random:z") < 0);
 
-#if 0  // bitrot, seek update
-    char defaultBuffer[512];
-
-    android_log_formatLogLine(p_format,
-        defaultBuffer, sizeof(defaultBuffer), 0, ANDROID_LOG_ERROR, 123,
-        123, 123, tag, "nofile", strlen("Hello"), "Hello", NULL);
-
-    fprintf(stderr, "%s\n", defaultBuffer);
-#endif
-
   android_log_format_free(p_format);
 }
 
