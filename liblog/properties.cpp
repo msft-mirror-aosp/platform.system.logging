@@ -70,8 +70,6 @@ static int check_cache(struct cache* cache) {
 #define BOOLEAN_FALSE 0xFE
 
 static void refresh_cache(struct cache_char* cache, const char* key) {
-  char buf[PROP_VALUE_MAX];
-
   if (!cache->cache.pinfo) {
     cache->cache.pinfo = __system_property_find(key);
     if (!cache->cache.pinfo) {
@@ -79,6 +77,9 @@ static void refresh_cache(struct cache_char* cache, const char* key) {
     }
   }
   cache->cache.serial = __system_property_serial(cache->cache.pinfo);
+
+  // __system_property_read() can't fail because we're using an existing prop_info*.
+  char buf[PROP_VALUE_MAX] __attribute__((__uninitialized__));
   __system_property_read(cache->cache.pinfo, 0, buf);
   switch (buf[0]) {
     case 't':
@@ -116,9 +117,15 @@ static int __android_log_level(const char* tag, size_t tag_len) {
   static cache_char tag_cache[2];
   static cache_char global_cache[2];
 
-  static const char* log_namespace = "persist.log.tag.";
-  char key[strlen(log_namespace) + tag_len + 1];
-  strcpy(key, log_namespace);
+  // This function is a hotspot, so micro-optimize the string construction.
+  // We don't need a trailing \0 here because it will either be overwritten (if tag_len != 0)
+  // or we'll overwrite the '.' with a \0 in the switch default case.
+  // It's worth the saving because the string happens to be exactly 16 bytes long without the \0,
+  // so we can copy it with just two instructions on arm64.
+  // We use __builtin_memcpy() throughout this function to avoid any fortify overhead.
+  static const char log_namespace[] = "persist.log.tag.";
+  char key[strlen(log_namespace) + tag_len + 1] __attribute__((__uninitialized__));
+  __builtin_memcpy(key, log_namespace, strlen(log_namespace));
 
   bool locked = trylock();
   bool change_detected, global_change_detected;
@@ -158,7 +165,8 @@ static int __android_log_level(const char* tag, size_t tag_len) {
         local_change_detected = true;
       }
     }
-    *stpncpy(key + strlen(log_namespace), tag, tag_len) = '\0';
+    __builtin_memcpy(key + strlen(log_namespace), tag, tag_len);
+    key[strlen(log_namespace) + tag_len] = '\0';
 
     for (size_t i = 0; i < arraysize(tag_cache); ++i) {
       cache_char* cache = &tag_cache[i];
