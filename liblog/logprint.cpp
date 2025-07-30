@@ -1602,9 +1602,16 @@ char* android_log_formatLogLine(AndroidLogFormat* p_format, char* defaultBuffer,
 
   /* the following code is tragically unreadable */
 
-  size_t numLines = 1;
-  if (!prefixSuffixIsHeaderFooter) {
-    const char* pm = entry->message;
+  size_t numLines;
+  char* p;
+  size_t bufferSize;
+  const char* pm;
+
+  if (prefixSuffixIsHeaderFooter) {
+    /* we're just wrapping message with a header/footer */
+    numLines = 1;
+  } else {
+    pm = entry->message;
     numLines = 0;
 
     /*
@@ -1622,7 +1629,7 @@ char* android_log_formatLogLine(AndroidLogFormat* p_format, char* defaultBuffer,
    * this is an upper bound--newlines in message may be counted
    * extraneously
    */
-  size_t bufferSize = (numLines * (prefixLen + suffixLen)) + 1;
+  bufferSize = (numLines * (prefixLen + suffixLen)) + 1;
   if (p_format->printable_output) {
     /* Calculate extra length to convert non-printable to printable */
     bufferSize += convertPrintable(NULL, entry->message, entry->messageLen);
@@ -1640,32 +1647,45 @@ char* android_log_formatLogLine(AndroidLogFormat* p_format, char* defaultBuffer,
     }
   }
 
-  char* p = ret;
+  ret[0] = '\0'; /* to start strcat off */
 
-  auto emit_one_line = [&](const char* line, size_t line_length) {
-    p = (char*) mempcpy(p, prefixBuf, prefixLen);
-    if (p_format->printable_output) {
-      p += convertPrintable(p, line, line_length);
-    } else {
-      p = (char*) mempcpy(p, line, line_length);
-    }
-    p = (char*) mempcpy(p, suffixBuf, suffixLen);
-  };
+  p = ret;
+  pm = entry->message;
 
   if (prefixSuffixIsHeaderFooter) {
-    emit_one_line(entry->message, entry->messageLen);
+    strcat(p, prefixBuf);
+    p += prefixLen;
+    if (p_format->printable_output) {
+      p += convertPrintable(p, entry->message, entry->messageLen);
+    } else {
+      strncat(p, entry->message, entry->messageLen);
+      p += entry->messageLen;
+    }
+    strcat(p, suffixBuf);
+    p += suffixLen;
   } else {
-    const char* pm = entry->message;
-    const char* message_end = entry->message + entry->messageLen;
     do {
-      // Find the next end-of-line in message.
-      const char* lineStart = pm;
-      while (pm < message_end && *pm != '\n') pm++;
+      const char* lineStart;
+      size_t lineLen;
+      lineStart = pm;
 
-      emit_one_line(lineStart, pm - lineStart);
+      /* Find the next end-of-line in message */
+      while (pm < (entry->message + entry->messageLen) && *pm != '\n') pm++;
+      lineLen = pm - lineStart;
+
+      strcat(p, prefixBuf);
+      p += prefixLen;
+      if (p_format->printable_output) {
+        p += convertPrintable(p, lineStart, lineLen);
+      } else {
+        strncat(p, lineStart, lineLen);
+        p += lineLen;
+      }
+      strcat(p, suffixBuf);
+      p += suffixLen;
 
       if (*pm == '\n') pm++;
-    } while (pm < message_end);
+    } while (pm < (entry->message + entry->messageLen));
   }
 
   if (p_outLength != NULL) {
