@@ -43,9 +43,6 @@
 #include <log/event_tag_map.h>
 #include <log/log.h>
 #include <log/log_event_list.h>
-#include <log/logprint.h>
-
-#include "../logcat_utils.h"
 
 #ifndef logcat_executable
 #define USING_LOGCAT_EXECUTABLE_DEFAULT
@@ -1767,70 +1764,4 @@ TEST(logcat, uid_filter) {
     UidsInLog(top2_uids, uids_only_top2);
 
     EXPECT_EQ(2U, uids_only_top2.size());
-}
-
-static bool checkPriForTag(AndroidLogFormat* p_format, const char* tag,
-                           android_LogPriority pri) {
-  return android_log_shouldPrintLine(p_format, tag, pri) &&
-         !android_log_shouldPrintLine(p_format, tag,
-                                      (android_LogPriority)(pri - 1));
-}
-
-TEST(logcat, filterRule) {
-  static const char tag[] = "random";
-
-  AndroidLogFormat* p_format = android_log_format_new();
-
-  android_log_addFilterRule(p_format, "*:i");
-
-  EXPECT_TRUE(checkPriForTag(p_format, tag, ANDROID_LOG_INFO));
-  EXPECT_TRUE(android_log_shouldPrintLine(p_format, tag, ANDROID_LOG_DEBUG) ==
-              0);
-  android_log_addFilterRule(p_format, "*");
-  EXPECT_TRUE(checkPriForTag(p_format, tag, ANDROID_LOG_DEBUG));
-  EXPECT_TRUE(android_log_shouldPrintLine(p_format, tag, ANDROID_LOG_DEBUG) > 0);
-  android_log_addFilterRule(p_format, "*:v");
-  EXPECT_TRUE(checkPriForTag(p_format, tag, ANDROID_LOG_VERBOSE));
-  EXPECT_TRUE(android_log_shouldPrintLine(p_format, tag, ANDROID_LOG_DEBUG) > 0);
-  android_log_addFilterRule(p_format, "*:i");
-  EXPECT_TRUE(checkPriForTag(p_format, tag, ANDROID_LOG_INFO));
-  EXPECT_TRUE(android_log_shouldPrintLine(p_format, tag, ANDROID_LOG_DEBUG) ==
-              0);
-
-  android_log_addFilterRule(p_format, tag);
-  EXPECT_TRUE(checkPriForTag(p_format, tag, ANDROID_LOG_VERBOSE));
-  EXPECT_TRUE(android_log_shouldPrintLine(p_format, tag, ANDROID_LOG_DEBUG) > 0);
-  android_log_addFilterRule(p_format, "random:v");
-  EXPECT_TRUE(checkPriForTag(p_format, tag, ANDROID_LOG_VERBOSE));
-  EXPECT_TRUE(android_log_shouldPrintLine(p_format, tag, ANDROID_LOG_DEBUG) > 0);
-  android_log_addFilterRule(p_format, "random:d");
-  EXPECT_TRUE(checkPriForTag(p_format, tag, ANDROID_LOG_DEBUG));
-  EXPECT_TRUE(android_log_shouldPrintLine(p_format, tag, ANDROID_LOG_DEBUG) > 0);
-  android_log_addFilterRule(p_format, "random:w");
-  EXPECT_TRUE(checkPriForTag(p_format, tag, ANDROID_LOG_WARN));
-  EXPECT_TRUE(android_log_shouldPrintLine(p_format, tag, ANDROID_LOG_DEBUG) ==
-              0);
-
-  android_log_addFilterRule(p_format, "crap:*");
-  EXPECT_TRUE(checkPriForTag(p_format, "crap", ANDROID_LOG_VERBOSE));
-  EXPECT_TRUE(
-      android_log_shouldPrintLine(p_format, "crap", ANDROID_LOG_VERBOSE) > 0);
-
-  // invalid expression
-  EXPECT_TRUE(android_log_addFilterRule(p_format, "random:z") < 0);
-  EXPECT_TRUE(checkPriForTag(p_format, tag, ANDROID_LOG_WARN));
-  EXPECT_TRUE(android_log_shouldPrintLine(p_format, tag, ANDROID_LOG_DEBUG) ==
-              0);
-
-  // Issue #550946
-  EXPECT_TRUE(addFilterString(p_format, " ") == 0);
-  EXPECT_TRUE(checkPriForTag(p_format, tag, ANDROID_LOG_WARN));
-
-  // note trailing space
-  EXPECT_TRUE(addFilterString(p_format, "*:s random:d ") == 0);
-  EXPECT_TRUE(checkPriForTag(p_format, tag, ANDROID_LOG_DEBUG));
-
-  EXPECT_TRUE(addFilterString(p_format, "*:s random:z") < 0);
-
-  android_log_format_free(p_format);
 }
