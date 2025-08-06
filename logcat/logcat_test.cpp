@@ -45,7 +45,7 @@
 #include <log/log_event_list.h>
 #include <log/logprint.h>
 
-#include "../logcat_utils.h"
+#include "logcat_utils.h"
 
 #ifndef logcat_executable
 #define USING_LOGCAT_EXECUTABLE_DEFAULT
