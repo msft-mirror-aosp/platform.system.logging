@@ -20,5 +20,6 @@
 
 #include <android/log.h>
 
-int PmsgWrite(log_id_t logId, const struct timespec* ts, const struct iovec* vec, size_t nr);
+int PmsgWrite(log_id_t logId, const struct timespec* ts, const struct iovec* vec, size_t nr,
+              uint16_t uid, uint16_t pid, uint16_t tid);
 void PmsgClose();
