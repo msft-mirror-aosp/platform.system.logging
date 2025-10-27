@@ -127,7 +127,9 @@ cc_binary {
         libs: [
             "ILogcatManagerService_aidl",
         ]
-    }
+    },
+
+    afdo: true,
 }
 
 cc_library_static {
