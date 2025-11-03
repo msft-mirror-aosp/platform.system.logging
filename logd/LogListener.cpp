@@ -36,8 +36,6 @@
 #include "LogListener.h"
 #include "LogPermissions.h"
 
-static bool uring_enabled_ = false;
-
 LogListener::LogListener(LogBuffer* buf) : socket_(GetLogSocket()), logbuf_(buf) {}
 
 bool LogListener::StartListener() {
@@ -77,10 +75,10 @@ bool LogListener::InitializeUring() {
 void LogListener::ThreadFunction() {
     prctl(PR_SET_NAME, "logd.writer");
 
-    uring_enabled_ = android::logd::flags::enable_iouring() && InitializeUring();
+    const bool use_uring_ = android::logd::flags::use_iouring() && InitializeUring();
 
     while (true) {
-        if (uring_enabled_) {
+        if (use_uring_) {
             HandleDataUring();
         } else {
             HandleDataSync();
