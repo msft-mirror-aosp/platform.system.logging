@@ -181,6 +181,7 @@ cc_defaults {
         "-Wextra",
         "-Werror",
         "-fno-builtin",
+        "-DANDROID_DEBUGGABLE=0",
     ] + event_flag,
 
     srcs: [
@@ -206,6 +207,14 @@ cc_defaults {
         "libbinder",
         "libutils",
     ],
+    product_variables: {
+        debuggable: {
+            cflags: [
+                "-UANDROID_DEBUGGABLE",
+                "-DANDROID_DEBUGGABLE=1",
+            ],
+        },
+    },
 }
 
 // Build tests for the logger. Run with:
