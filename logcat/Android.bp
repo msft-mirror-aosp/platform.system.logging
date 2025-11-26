@@ -101,3 +101,15 @@ cc_test {
         "logcatd_test.cpp",
     ],
 }
+
+java_library_host {
+    name: "logcat-proto-java",
+    srcs: [
+        "logcat.proto",
+    ],
+    proto: {
+        type: "full",
+    },
+    // b/267831518: Pin tradefed and dependencies to Java 11.
+    java_version: "11",
+}
