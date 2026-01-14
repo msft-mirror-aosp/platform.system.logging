@@ -28,6 +28,7 @@ rust_library {
         "//apex_available:anyapex",
         "//apex_available:platform",
     ],
+    recovery_available: true,
     min_sdk_version: "29",
 }
 
