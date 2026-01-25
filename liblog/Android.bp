@@ -203,6 +203,9 @@ ndk_library {
     symbol_file: "liblog.map.txt",
     first_version: "9",
     unversioned_until: "current",
+    // liblog does not depend on ART at all, so the full library is allowed.
+    // The denylist stub also depends on liblog to print assertion messages.
+    bypass_artless_denylist: true,
 }
 
 rust_bindgen {
