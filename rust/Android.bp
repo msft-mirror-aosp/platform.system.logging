@@ -30,6 +30,7 @@ rust_library {
     ],
     recovery_available: true,
     min_sdk_version: "29",
+    export_include_dirs: ["src/include"],
 }
 
 rust_library {
