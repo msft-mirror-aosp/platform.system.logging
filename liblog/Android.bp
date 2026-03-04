@@ -122,9 +122,6 @@ cc_defaults {
     export_header_lib_headers: ["liblog_headers"],
 
     cflags: [
-        "-Wall",
-        "-Werror",
-        "-Wextra",
         "-Wexit-time-destructors",
         // This is what we want to do:
         //  liblog_cflags := $(shell \
