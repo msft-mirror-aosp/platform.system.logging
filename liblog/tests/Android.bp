@@ -126,10 +126,6 @@ cc_test {
 sh_test {
     name: "liblog_device_preparer.sh",
     src: "liblog_device_preparer.sh",
-    test_suites: [
-        "cts",
-        "general-tests",
-    ],
 }
 
 cc_test_host {
